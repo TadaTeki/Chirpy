@@ -9,9 +9,13 @@ import (
 	"os"
 	"regexp"
 	"sync/atomic"
+	"time"
+
+	"context"
 
 	"github.com/Tadateki/Chirpy/internal/database"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
 	_ "github.com/lib/pq"
@@ -41,12 +45,13 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		dbQueries:      dbQueries,
 		platform:       platform,
+		db:             db,
 	}
 	servemux := http.NewServeMux()
 	servemux.HandleFunc("GET /api/healthz", healthHandler)
 	servemux.HandleFunc("GET /admin/metrics", cfg.countHandler)
 	servemux.HandleFunc("POST /admin/reset", cfg.resetHandler)
-	servemux.HandleFunc("POST /api/chirps", chirpsHandler)
+	servemux.HandleFunc("POST /api/chirps", cfg.chirpsHandler)
 	servemux.HandleFunc("POST /api/users", cfg.createUserHandler)
 
 	servemux.Handle("/app/", cfg.middlewareMetricsInc(http.FileServer(http.Dir("."))))
@@ -99,11 +104,25 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Reset OK"))
 }
 
-func chirpsHandler(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
+	type createChirpRequest struct {
+		Body   string `json:"body"`
+		UserID string `json:"user_id"`
+	}
 	// JSONをパース
-	var req chirpRequest
+	var req createChirpRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Body == "" || req.UserID == "" {
+		http.Error(w, `{"error":"missing body or user_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	userUUID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user_id format"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -115,11 +134,37 @@ func chirpsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// NGワードフィルタリング
 	cleaned_body := replaceNGWords(req.Body)
-	respondWithJSON(w, http.StatusOK, map[string]string{"cleaned_body": cleaned_body})
+	//respondWithJSON(w, http.StatusOK, map[string]string{"cleaned_body": cleaned_body})
+
+	// DB に挿入（sqlc で CreateChirp(body, user_id) を生成している前提）
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	chirp, err := cfg.dbQueries.CreateChirp(ctx, database.CreateChirpParams{
+		Body:   cleaned_body,
+		UserID: userUUID,
+	})
+	if err != nil {
+		log.Printf("CreateChirp error: %v", err) // ★追加
+		respondWithError(w, http.StatusInternalServerError, "ERR_DB")
+		return
+	}
+
+	// 作成した Chirp の情報を返す
+	respondWithJSON(w, http.StatusCreated, map[string]string{
+		"id":         chirp.ID.String(),
+		"created_at": chirp.CreatedAt.String(),
+		"updated_at": chirp.UpdatedAt.String(),
+		"body":       chirp.Body,
+		"user_id":    chirp.UserID.String(),
+	})
 
 }
 
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
+	type createUserRequest struct {
+		Email string `json:"email"`
+	}
 	// JSONをパース
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

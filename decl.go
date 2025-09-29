@@ -4,17 +4,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"database/sql"
+
 	"github.com/Tadateki/Chirpy/internal/database"
 	"github.com/google/uuid"
+	//"github.com/vertica/vertica-sql-go/logger"
 )
-
-type chirpRequest struct {
-	Body string `json:"body"`
-}
-
-type createUserRequest struct {
-	Email string `json:"email"`
-}
 
 type User struct {
 	ID        uuid.UUID `json:"id"`
@@ -35,4 +30,6 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
 	platform       string
+	db             *sql.DB
+	// logger         *log.Logger
 }
