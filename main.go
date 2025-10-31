@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"context"
 
+	"github.com/Tadateki/Chirpy/internal/auth"
 	"github.com/Tadateki/Chirpy/internal/database"
 
 	"github.com/google/uuid"
@@ -50,9 +52,13 @@ func main() {
 	servemux := http.NewServeMux()
 	servemux.HandleFunc("GET /api/healthz", healthHandler)
 	servemux.HandleFunc("GET /admin/metrics", cfg.countHandler)
+	servemux.HandleFunc("GET /api/chirps", cfg.getchirpsHandler)
+	servemux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirpByIDHandler)
+
 	servemux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	servemux.HandleFunc("POST /api/chirps", cfg.chirpsHandler)
 	servemux.HandleFunc("POST /api/users", cfg.createUserHandler)
+	servemux.HandleFunc("POST /api/login", cfg.loginUserHandler)
 
 	servemux.Handle("/app/", cfg.middlewareMetricsInc(http.FileServer(http.Dir("."))))
 
@@ -163,8 +169,10 @@ func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
 	type createUserRequest struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
+
 	// JSONをパース
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -172,8 +180,19 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// PasswordをHash化
+	HashedPassword, err := auth.HashPassword(req.Password)
+	if err != nil {
+		http.Error(w, `{"error":"Hash Password Fail Error"}`, http.StatusBadRequest)
+	}
+
+	arg := database.CreateUserParams{
+		Email:          req.Email,
+		HashedPassword: HashedPassword,
+	}
+
 	// DBにユーザーを作成
-	user, err := cfg.dbQueries.CreateUser(r.Context(), req.Email)
+	user, err := cfg.dbQueries.CreateUser(r.Context(), arg)
 	if err != nil {
 		log.Printf("CreateUser error: %v", err) // ★追加
 		respondWithError(w, http.StatusInternalServerError, "ERR_DB")
@@ -185,6 +204,100 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 		"created_at": user.CreatedAt.String(),
 		"updated_at": user.UpdatedAt.String(),
 		"email":      user.Email,
+	})
+
+}
+
+func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
+	type LoginUserRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	var req LoginUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	user, err := cfg.dbQueries.GetUserFromEmail(r.Context(), req.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+			return
+		}
+		respondWithError(w, http.StatusInternalServerError, "Database Error")
+		return
+	}
+
+	chk, err := auth.CheckPasswordHash(req.Password, user.HashedPassword)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Password Check Error")
+		return
+	}
+	if !chk {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"id":         user.ID.String(),
+		"created_at": user.CreatedAt.String(),
+		"updated_at": user.UpdatedAt.String(),
+		"email":      user.Email,
+	})
+
+}
+
+func (cfg *apiConfig) getchirpsHandler(w http.ResponseWriter, r *http.Request) {
+	// DBからChirpsを取得
+	chirps, err := cfg.dbQueries.GetChirps(r.Context())
+	if err != nil {
+		log.Printf("GetChirps error: %v", err) // ★追加
+		respondWithError(w, http.StatusInternalServerError, "ERR_DB")
+		return
+	}
+
+	// Chirpsの情報を返す
+	var response []map[string]string
+	for _, chirp := range chirps {
+		response = append(response, map[string]string{
+			"id":         chirp.ID.String(),
+			"created_at": chirp.CreatedAt.String(),
+			"updated_at": chirp.UpdatedAt.String(),
+			"body":       chirp.Body,
+			"user_id":    chirp.UserID.String(),
+		})
+	}
+	respondWithJSON(w, http.StatusOK, response)
+
+}
+
+func (cfg *apiConfig) getChirpByIDHandler(w http.ResponseWriter, r *http.Request) {
+	// URLパスからchirpIDを取得
+	chirpIDStr := r.PathValue("chirpID")
+
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "invalid chirp ID")
+		return
+	}
+
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusNotFound, "chirp not found")
+		} else {
+			respondWithError(w, http.StatusInternalServerError, "ERR_DB")
+		}
+		return
+	}
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"id":         chirp.ID.String(),
+		"created_at": chirp.CreatedAt.String(),
+		"updated_at": chirp.UpdatedAt.String(),
+		"body":       chirp.Body,
+		"user_id":    chirp.UserID.String(),
 	})
 
 }
