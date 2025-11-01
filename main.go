@@ -3,21 +3,14 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"sync/atomic"
-	"time"
-
-	"context"
 
 	"github.com/Tadateki/Chirpy/internal/auth"
 	"github.com/Tadateki/Chirpy/internal/database"
 
-	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
 	_ "github.com/lib/pq"
@@ -39,15 +32,13 @@ func main() {
 	}
 	dbQueries := database.New(db)
 
-	// 環境変数からPLATFORMを取得
-	platform := os.Getenv("PLATFORM")
-
 	// APIサーバー起動
 	cfg := &apiConfig{
 		fileserverHits: atomic.Int32{},
 		dbQueries:      dbQueries,
-		platform:       platform,
+		platform:       os.Getenv("PLATFORM"),
 		db:             db,
+		tokenSecret:    os.Getenv("SECRET"),
 	}
 	servemux := http.NewServeMux()
 	servemux.HandleFunc("GET /api/healthz", healthHandler)
@@ -74,97 +65,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
-}
-
-func (cfg *apiConfig) countHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-
-	html := fmt.Sprintf(`
-	<html>
-		<body>
-	      <h1>Welcome, Chirpy Admin</h1>
-		      <p>Chirpy has been visited %d times!</p>
-		</body>
-	</html>Count handler called`, cfg.fileserverHits.Load())
-	w.Write([]byte(html))
-}
-
-func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
-	if cfg.platform != "dev" {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
-	err := cfg.dbQueries.DeleteAllUsers(r.Context())
-	if err != nil {
-		log.Printf("DeleteAllUsers error: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "ERR_DB")
-		return
-	}
-
-	cfg.fileserverHits.Store(0)
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Reset OK"))
-}
-
-func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
-	type createChirpRequest struct {
-		Body   string `json:"body"`
-		UserID string `json:"user_id"`
-	}
-	// JSONをパース
-	var req createChirpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
-		return
-	}
-	if req.Body == "" || req.UserID == "" {
-		http.Error(w, `{"error":"missing body or user_id"}`, http.StatusBadRequest)
-		return
-	}
-
-	userUUID, err := uuid.Parse(req.UserID)
-	if err != nil {
-		http.Error(w, `{"error":"invalid user_id format"}`, http.StatusBadRequest)
-		return
-	}
-
-	// バリデーション（例: 140文字制限）
-	if len(req.Body) > maxChirpLength {
-		respondWithError(w, http.StatusBadRequest, "ERR_CHIRP_TOO_LONG")
-		return
-	}
-
-	// NGワードフィルタリング
-	cleaned_body := replaceNGWords(req.Body)
-	//respondWithJSON(w, http.StatusOK, map[string]string{"cleaned_body": cleaned_body})
-
-	// DB に挿入（sqlc で CreateChirp(body, user_id) を生成している前提）
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	chirp, err := cfg.dbQueries.CreateChirp(ctx, database.CreateChirpParams{
-		Body:   cleaned_body,
-		UserID: userUUID,
-	})
-	if err != nil {
-		log.Printf("CreateChirp error: %v", err) // ★追加
-		respondWithError(w, http.StatusInternalServerError, "ERR_DB")
-		return
-	}
-
-	// 作成した Chirp の情報を返す
-	respondWithJSON(w, http.StatusCreated, map[string]string{
-		"id":         chirp.ID.String(),
-		"created_at": chirp.CreatedAt.String(),
-		"updated_at": chirp.UpdatedAt.String(),
-		"body":       chirp.Body,
-		"user_id":    chirp.UserID.String(),
-	})
-
 }
 
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -208,139 +108,9 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 
 }
 
-func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
-	type LoginUserRequest struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-
-	var req LoginUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
-		return
-	}
-
-	user, err := cfg.dbQueries.GetUserFromEmail(r.Context(), req.Email)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
-			return
-		}
-		respondWithError(w, http.StatusInternalServerError, "Database Error")
-		return
-	}
-
-	chk, err := auth.CheckPasswordHash(req.Password, user.HashedPassword)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Password Check Error")
-		return
-	}
-	if !chk {
-		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
-		return
-	}
-
-	respondWithJSON(w, http.StatusOK, map[string]string{
-		"id":         user.ID.String(),
-		"created_at": user.CreatedAt.String(),
-		"updated_at": user.UpdatedAt.String(),
-		"email":      user.Email,
-	})
-
-}
-
-func (cfg *apiConfig) getchirpsHandler(w http.ResponseWriter, r *http.Request) {
-	// DBからChirpsを取得
-	chirps, err := cfg.dbQueries.GetChirps(r.Context())
-	if err != nil {
-		log.Printf("GetChirps error: %v", err) // ★追加
-		respondWithError(w, http.StatusInternalServerError, "ERR_DB")
-		return
-	}
-
-	// Chirpsの情報を返す
-	var response []map[string]string
-	for _, chirp := range chirps {
-		response = append(response, map[string]string{
-			"id":         chirp.ID.String(),
-			"created_at": chirp.CreatedAt.String(),
-			"updated_at": chirp.UpdatedAt.String(),
-			"body":       chirp.Body,
-			"user_id":    chirp.UserID.String(),
-		})
-	}
-	respondWithJSON(w, http.StatusOK, response)
-
-}
-
-func (cfg *apiConfig) getChirpByIDHandler(w http.ResponseWriter, r *http.Request) {
-	// URLパスからchirpIDを取得
-	chirpIDStr := r.PathValue("chirpID")
-
-	chirpID, err := uuid.Parse(chirpIDStr)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "invalid chirp ID")
-		return
-	}
-
-	chirp, err := cfg.dbQueries.GetChirp(r.Context(), chirpID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			respondWithError(w, http.StatusNotFound, "chirp not found")
-		} else {
-			respondWithError(w, http.StatusInternalServerError, "ERR_DB")
-		}
-		return
-	}
-	respondWithJSON(w, http.StatusOK, map[string]string{
-		"id":         chirp.ID.String(),
-		"created_at": chirp.CreatedAt.String(),
-		"updated_at": chirp.UpdatedAt.String(),
-		"body":       chirp.Body,
-		"user_id":    chirp.UserID.String(),
-	})
-
-}
-
-// Hanlder用の内部関数
-func respondWithError(w http.ResponseWriter, statusCode int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	resp := fmt.Sprintf(`{"error": "%s"}`, message)
-	w.Write([]byte(resp))
-}
-
-func respondWithJSON(w http.ResponseWriter, cod int, payload interface{}) {
-	response, err := json.Marshal(payload)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "JSON Marshal Error")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(cod)
-	w.Write(response)
-}
-
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Add(1)
-		next.ServeHTTP(w, r)
-	})
-}
-
 func middlewareLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
-}
-
-func replaceNGWords(body string) string {
-
-	result := body
-	for _, ng := range ngwords {
-		re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(ng))
-		result = re.ReplaceAllString(result, "****")
-	}
-	return result
 }

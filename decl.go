@@ -32,5 +32,6 @@ type apiConfig struct {
 	dbQueries      *database.Queries
 	platform       string
 	db             *sql.DB
+	tokenSecret    string
 	// logger         *log.Logger
 }

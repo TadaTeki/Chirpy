@@ -1,0 +1,61 @@
+@baseUrl = http://localhost:8080
+@jwtTokenSaul = 
+@jwtTokenMike = 
+@userIDSaul =
+@userIDMike =
+
+### Reset
+POST {{baseUrl}}/admin/reset
+
+### Create Saul
+POST {{baseUrl}}/api/users
+Content-Type: application/json
+
+{
+  "email": "saul@bettercall.com",
+  "password": "123456"
+}
+
+> {% client.global.set("userIDSaul", response.body.id); %}
+
+### Create Mike
+POST {{baseUrl}}/api/users
+Content-Type: application/json
+
+{
+  "email": "mike@bettercall.com",
+  "password": "98765"
+}
+
+> {% client.global.set("userIDMike", response.body.id); %}
+
+### Saul login
+POST {{baseUrl}}/api/login
+Content-Type: application/json
+
+{
+  "email": "saul@bettercall.com",
+  "password": "123456"
+}
+
+> {% client.global.set("jwtTokenSaul", response.body.token); %}
+
+### Mike login
+POST {{baseUrl}}/api/login
+Content-Type: application/json
+
+{
+  "email": "mike@bettercall.com",
+  "password": "98765"
+}
+
+> {% client.global.set("jwtTokenMike", response.body.token); %}
+
+### Saul chirp
+POST {{baseUrl}}/api/chirps
+Authorization: Bearer {{jwtTokenSaul}}
+Content-Type: application/json
+
+{
+  "body": "Clearly his taste in women..."
+}
