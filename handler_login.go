@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/Tadateki/Chirpy/internal/auth"
 )
@@ -15,6 +16,7 @@ func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 
+	// JSONをパース
 	var req LoginUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
@@ -41,11 +43,24 @@ func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	token, err := auth.MakeJWT(user.ID, cfg.tokenSecret, time.Duration(cfg.expires_in_seconds)*time.Second)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Token Generation Error")
+		return
+	}
+
+	ref_token, err := auth.MakeRefreshToken()
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Refresh Token Generation Error")
+		return
+	}
 	respondWithJSON(w, http.StatusOK, map[string]string{
 		"id":         user.ID.String(),
 		"created_at": user.CreatedAt.String(),
 		"updated_at": user.UpdatedAt.String(),
 		"email":      user.Email,
+		"token":      token,
+		"ref_token":  ref_token,
 	})
 
 }

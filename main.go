@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/Tadateki/Chirpy/internal/auth"
@@ -31,14 +32,18 @@ func main() {
 		log.Fatal(err)
 	}
 	dbQueries := database.New(db)
+	expires_in_seconds, _ := strconv.Atoi(os.Getenv("EXPIRES_IN_SECONDS"))
+	refresh_expires_in_days, _ := strconv.Atoi(os.Getenv("REFRESH_EXPIRES_IN_DAYS"))
 
 	// APIサーバー起動
 	cfg := &apiConfig{
-		fileserverHits: atomic.Int32{},
-		dbQueries:      dbQueries,
-		platform:       os.Getenv("PLATFORM"),
-		db:             db,
-		tokenSecret:    os.Getenv("SECRET"),
+		fileserverHits:          atomic.Int32{},
+		dbQueries:               dbQueries,
+		platform:                os.Getenv("PLATFORM"),
+		db:                      db,
+		tokenSecret:             os.Getenv("SECRETSTRING"),
+		expires_in_seconds:      expires_in_seconds,
+		refresh_expires_in_days: refresh_expires_in_days,
 	}
 	servemux := http.NewServeMux()
 	servemux.HandleFunc("GET /api/healthz", healthHandler)

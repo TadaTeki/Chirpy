@@ -3,19 +3,19 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
 	"time"
 
+	"github.com/Tadateki/Chirpy/internal/auth"
 	"github.com/Tadateki/Chirpy/internal/database"
-	"github.com/google/uuid"
 )
 
 func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	type createChirpRequest struct {
-		Body   string `json:"body"`
-		UserID string `json:"user_id"`
+		Body string `json:"body"`
 	}
 	// JSONをパース
 	var req createChirpRequest
@@ -23,14 +23,19 @@ func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Body == "" || req.UserID == "" {
-		http.Error(w, `{"error":"missing body or user_id"}`, http.StatusBadRequest)
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": no authorization in header : %s"}`, err.Error()), http.StatusUnauthorized)
+	}
+
+	user, err := auth.ValidateJWT(token, cfg.tokenSecret)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": no authorization in header : %s"}`, err.Error()), http.StatusUnauthorized)
 		return
 	}
 
-	userUUID, err := uuid.Parse(req.UserID)
-	if err != nil {
-		http.Error(w, `{"error":"invalid user_id format"}`, http.StatusBadRequest)
+	if req.Body == "" {
+		http.Error(w, fmt.Sprintf(`{"error":"missing body: %s"}`, req.Body), http.StatusBadRequest)
 		return
 	}
 
@@ -50,7 +55,7 @@ func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 
 	chirp, err := cfg.dbQueries.CreateChirp(ctx, database.CreateChirpParams{
 		Body:   cleaned_body,
-		UserID: userUUID,
+		UserID: user,
 	})
 	if err != nil {
 		log.Printf("CreateChirp error: %v", err) // ★追加
