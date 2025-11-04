@@ -28,12 +28,13 @@ var ngwords = []string{
 var maxChirpLength = 140
 
 type apiConfig struct {
-	fileserverHits          atomic.Int32
-	dbQueries               *database.Queries
-	platform                string
-	db                      *sql.DB
-	tokenSecret             string
-	expires_in_seconds      int
-	refresh_expires_in_days int
+	fileserverHits           atomic.Int32
+	dbQueries                *database.Queries
+	platform                 string
+	db                       *sql.DB
+	tokenSecret              string
+	expires_in_seconds       int
+	refresh_expires_in_hours int
+	polka_key                string
 	// logger         *log.Logger
 }

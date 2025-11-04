@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -20,22 +19,23 @@ func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	// JSONをパース
 	var req createChirpRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		respondWithError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
+
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": no authorization in header : %s"}`, err.Error()), http.StatusUnauthorized)
+		respondWithError(w, http.StatusUnauthorized, "No authorization in hader")
 	}
 
 	user, err := auth.ValidateJWT(token, cfg.tokenSecret)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": no authorization in header : %s"}`, err.Error()), http.StatusUnauthorized)
+		respondWithError(w, http.StatusUnauthorized, "Authorization Failure")
 		return
 	}
 
 	if req.Body == "" {
-		http.Error(w, fmt.Sprintf(`{"error":"missing body: %s"}`, req.Body), http.StatusBadRequest)
+		respondWithError(w, http.StatusBadRequest, "Missing body")
 		return
 	}
 
@@ -53,10 +53,12 @@ func (cfg *apiConfig) chirpsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	chirp, err := cfg.dbQueries.CreateChirp(ctx, database.CreateChirpParams{
+	arg := database.CreateChirpParams{
 		Body:   cleaned_body,
 		UserID: user,
-	})
+	}
+
+	chirp, err := cfg.dbQueries.CreateChirp(ctx, arg)
 	if err != nil {
 		log.Printf("CreateChirp error: %v", err) // ★追加
 		respondWithError(w, http.StatusInternalServerError, "ERR_DB")

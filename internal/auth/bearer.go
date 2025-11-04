@@ -21,3 +21,4 @@ func GetBearerToken(headers http.Header) (string, error) {
 	return strings.TrimPrefix(authHeader, "Bearer "), nil
 
 }
+

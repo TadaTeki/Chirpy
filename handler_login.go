@@ -1,5 +1,7 @@
 package main
 
+// All code comments should be written in English.
+
 import (
 	"database/sql"
 	"encoding/json"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Tadateki/Chirpy/internal/auth"
+	"github.com/Tadateki/Chirpy/internal/database"
 )
 
 func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -16,13 +19,14 @@ func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 
-	// JSONをパース
+	// JSON purse
 	var req LoginUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		respondWithError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
+	// User Lookup
 	user, err := cfg.dbQueries.GetUserFromEmail(r.Context(), req.Email)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -33,6 +37,7 @@ func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Password Check
 	chk, err := auth.CheckPasswordHash(req.Password, user.HashedPassword)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Password Check Error")
@@ -43,24 +48,40 @@ func (cfg *apiConfig) loginUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// JWT Token Generation
 	token, err := auth.MakeJWT(user.ID, cfg.tokenSecret, time.Duration(cfg.expires_in_seconds)*time.Second)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Token Generation Error")
 		return
 	}
 
-	ref_token, err := auth.MakeRefreshToken()
+	// Refresh Token Generation
+	ref_token_str, err := auth.MakeRefreshToken()
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Refresh Token Generation Error")
 		return
 	}
-	respondWithJSON(w, http.StatusOK, map[string]string{
-		"id":         user.ID.String(),
-		"created_at": user.CreatedAt.String(),
-		"updated_at": user.UpdatedAt.String(),
-		"email":      user.Email,
-		"token":      token,
-		"ref_token":  ref_token,
+
+	arg := database.StoreRefreshTokenParams{
+		Token:     ref_token_str,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(time.Duration(cfg.refresh_expires_in_hours) * time.Hour),
+	}
+
+	ref_token, err := cfg.dbQueries.StoreRefreshToken(r.Context(), arg)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Refresh Token Storing Error")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]any{
+		"id":            user.ID.String(),
+		"created_at":    user.CreatedAt.String(),
+		"updated_at":    user.UpdatedAt.String(),
+		"email":         user.Email,
+		"token":         token,
+		"refresh_token": ref_token.Token,
+		"is_chirpy_red": user.IsChirpyRed,
 	})
 
 }

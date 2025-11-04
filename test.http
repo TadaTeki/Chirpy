@@ -1,61 +1,81 @@
-@baseUrl = http://localhost:8080
-@jwtTokenSaul = 
-@jwtTokenMike = 
-@userIDSaul =
-@userIDMike =
+### リセット管理者状態
+POST http://localhost:8080/admin/reset
+###
+# Expecting status code: 200
 
-### Reset
-POST {{baseUrl}}/admin/reset
-
-### Create Saul
-POST {{baseUrl}}/api/users
+### ユーザー作成
+POST http://localhost:8080/api/users
 Content-Type: application/json
 
 {
   "email": "saul@bettercall.com",
   "password": "123456"
 }
+###
+# Expecting status code: 201
+# Expecting JSON at .email to be equal to "saul@bettercall.com"
 
-> {% client.global.set("userIDSaul", response.body.id); %}
-
-### Create Mike
-POST {{baseUrl}}/api/users
-Content-Type: application/json
-
-{
-  "email": "mike@bettercall.com",
-  "password": "98765"
-}
-
-> {% client.global.set("userIDMike", response.body.id); %}
-
-### Saul login
-POST {{baseUrl}}/api/login
+### ログインしてアクセストークン・リフレッシュトークン取得
+POST http://localhost:8080/api/login
 Content-Type: application/json
 
 {
   "email": "saul@bettercall.com",
   "password": "123456"
 }
+###
+# Expecting status code: 200
+# @token = $.token
+# @refresh_token = $.refresh_token
 
-> {% client.global.set("jwtTokenSaul", response.body.token); %}
-
-### Mike login
-POST {{baseUrl}}/api/login
+### Chirp 作成（リフレッシュトークンで試す → 401 になるはず）
+POST http://localhost:8080/api/chirps
+Authorization: Bearer {{refresh_token}}
 Content-Type: application/json
 
 {
-  "email": "mike@bettercall.com",
-  "password": "98765"
+  "body": "Let’s just say I know a guy... who knows a guy... who knows another guy."
 }
+###
+# Expecting status code: 401
 
-> {% client.global.set("jwtTokenMike", response.body.token); %}
-
-### Saul chirp
-POST {{baseUrl}}/api/chirps
-Authorization: Bearer {{jwtTokenSaul}}
+### Chirp 作成（アクセストークンで成功）
+POST http://localhost:8080/api/chirps
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "body": "Clearly his taste in women..."
+  "body": "Let’s just say I know a guy... who knows a guy... who knows another guy."
 }
+###
+# Expecting status code: 201
+
+### リフレッシュトークンでアクセストークン再発行
+POST http://localhost:8080/api/refresh
+Authorization: Bearer {{refresh_token}}
+###
+# Expecting status code: 200
+# @token2 = $.token
+
+### Chirp 作成（新しいアクセストークンで成功）
+POST http://localhost:8080/api/chirps
+Authorization: Bearer {{token2}}
+Content-Type: application/json
+
+{
+  "body": "I'm the guy who's gonna win you this case."
+}
+###
+# Expecting status code: 201
+
+### リフレッシュトークン無効化（ログアウト）
+POST http://localhost:8080/api/revoke
+Authorization: Bearer {{refresh_token}}
+###
+# Expecting status code: 204
+
+### リフレッシュトークンでアクセストークン再発行 → 失敗
+POST http://localhost:8080/api/refresh
+Authorization: Bearer {{refresh_token}}
+###
+# Expecting status code: 401
